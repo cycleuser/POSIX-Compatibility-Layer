@@ -42,6 +42,26 @@ Launch the graphical interface:
 posix-gui
 ```
 
+## Screenshots
+
+### Help Command
+![Help Command](images/0-help.png)
+
+### List Directory (ls)
+![List Directory](images/1-ls.png)
+
+### Print Working Directory (pwd)
+![PWD](images/2-pwd.png)
+
+### Change Directory (cd)
+![Change Directory](images/3-cd.png)
+
+### System Info (lscpu)
+![LSCPU](images/4-lscpu.png)
+
+### PCI Devices (lspci)
+![LSPCI](images/5-lspci.png)
+
 ## License
 
 MIT License

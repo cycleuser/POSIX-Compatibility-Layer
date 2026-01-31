@@ -5,6 +5,7 @@ import shlex
 import threading
 import queue
 from .core import CompatLayer, CommandRegistry
+from .ollama_client import OllamaClient
 from . import i18n
 from .i18n import _
 
@@ -16,6 +17,7 @@ class CompatGUI:
         
         self.compat = CompatLayer()
         self.registry = CommandRegistry.get_all_commands()
+        self.ollama_client = OllamaClient()
         
         # Thread communication
         self.result_queue = queue.Queue()
@@ -78,6 +80,15 @@ class CompatGUI:
 
         self.status_bar.config(text=_("gui_curr_dir", self.compat.get_cwd()))
         
+        # Update AI Panel
+        try:
+            self.lbl_model.config(text=_("gui_lbl_model"))
+            self.btn_refresh.config(text=_("gui_btn_refresh"))
+            self.btn_ask.config(text=_("gui_btn_ask_ai"))
+            self.btn_suggest.config(text=_("gui_btn_ai_suggest"))
+        except:
+            pass
+
         # Update Buttons
         # We need references to buttons to update them.
         # Let's recreate the button bar to be safe and simple.
@@ -145,6 +156,9 @@ class CompatGUI:
         # 3. Button Bar Container
         self.btn_container = tk.Frame(self.root, bg=self.bg_color)
         self.btn_container.pack(fill=tk.X, padx=10, pady=(0, 5))
+
+        # 3.5 AI Panel
+        self.create_ai_panel()
         
         # 4. Progress Bar (Indeterminate)
         self.progress = ttk.Progressbar(self.root, mode='indeterminate')
@@ -161,6 +175,94 @@ class CompatGUI:
             fg=self.fg_color
         )
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+
+    def create_ai_panel(self):
+        self.ai_container = tk.Frame(self.root, bg=self.bg_color)
+        self.ai_container.pack(fill=tk.X, padx=10, pady=(0, 5))
+        
+        # Model Label
+        self.lbl_model = tk.Label(self.ai_container, text=_("gui_lbl_model"), bg=self.bg_color, fg=self.fg_color)
+        self.lbl_model.pack(side=tk.LEFT, padx=(0, 5))
+        
+        # Combobox
+        self.model_var = tk.StringVar()
+        self.combo_model = ttk.Combobox(self.ai_container, textvariable=self.model_var, state="readonly", width=20)
+        self.combo_model.pack(side=tk.LEFT, padx=(0, 5))
+        
+        # Refresh Button
+        self.btn_refresh = tk.Button(self.ai_container, text=_("gui_btn_refresh"), command=self.refresh_models,
+                                     bg=self.button_bg, fg=self.fg_color, relief=tk.FLAT)
+        self.btn_refresh.pack(side=tk.LEFT, padx=(0, 10))
+        
+        # Ask AI Button
+        self.btn_ask = tk.Button(self.ai_container, text=_("gui_btn_ask_ai"), command=self.ask_ai,
+                                 bg=self.button_bg, fg=self.fg_color, relief=tk.FLAT)
+        self.btn_ask.pack(side=tk.LEFT, padx=(0, 5))
+        
+        # Suggest Cmd Button
+        self.btn_suggest = tk.Button(self.ai_container, text=_("gui_btn_ai_suggest"), command=self.ai_suggest,
+                                     bg=self.button_bg, fg=self.fg_color, relief=tk.FLAT)
+        self.btn_suggest.pack(side=tk.LEFT)
+
+        # Initial load
+        self.root.after(500, self.refresh_models)
+
+    def refresh_models(self):
+        self.log_output("Fetching local models...\n")
+        threading.Thread(target=self._fetch_models_thread, daemon=True).start()
+
+    def _fetch_models_thread(self):
+        models = self.ollama_client.get_models()
+        self.result_queue.put(("models", models))
+
+    def ask_ai(self):
+        prompt = self.command_entry.get()
+        if not prompt.strip():
+            return
+        
+        model = self.model_var.get()
+        if not model:
+            self.log_output("Error: No model selected.\n")
+            return
+
+        self.command_entry.delete(0, tk.END)
+        self.log_output(f"AI ({model}) > {prompt}\n")
+        self.log_output(_("msg_ai_thinking") + "\n")
+        
+        self.start_ai_execution("chat", model, prompt)
+
+    def ai_suggest(self):
+        prompt = self.command_entry.get()
+        if not prompt.strip():
+            return
+
+        model = self.model_var.get()
+        if not model:
+            self.log_output("Error: No model selected.\n")
+            return
+            
+        self.log_output(f"AI Suggest ({model}) > {prompt}\n")
+        self.log_output(_("msg_ai_thinking") + "\n")
+        
+        system_prompt = "You are a command line assistant. Return ONLY the POSIX command to execute based on the user request. Do not include markdown code blocks or explanations. Just the command."
+        self.start_ai_execution("suggest", model, prompt, system_prompt)
+
+    def start_ai_execution(self, mode, model, prompt, system=None):
+        self.is_running = True
+        self.progress.pack(fill=tk.X, padx=10, pady=(0, 5))
+        self.progress.start(10)
+        self.command_entry.config(state='disabled')
+        
+        threading.Thread(target=self._ai_thread, args=(mode, model, prompt, system), daemon=True).start()
+
+    def _ai_thread(self, mode, model, prompt, system):
+        try:
+            response = self.ollama_client.generate(model, prompt, system)
+            self.result_queue.put(("ai_result", (mode, response)))
+        except Exception as e:
+            self.result_queue.put(("error", str(e)))
+        finally:
+            self.result_queue.put(("done", None))
 
     def process_command(self, event=None):
         if self.is_running:
@@ -241,6 +343,21 @@ class CompatGUI:
                     self.log_output(f"Error: {data}\n")
                 elif msg_type == "update_status":
                     self.update_status()
+                elif msg_type == "models":
+                    if data:
+                        self.combo_model['values'] = data
+                        self.combo_model.current(0)
+                        self.log_output(f"Found {len(data)} models.\n")
+                    else:
+                        self.log_output(_("err_ollama_not_found") + "\n")
+                elif msg_type == "ai_result":
+                    mode, response = data
+                    if mode == "chat":
+                        self.log_output(f"{response}\n\n")
+                    elif mode == "suggest":
+                        self.command_entry.delete(0, tk.END)
+                        self.command_entry.insert(0, response.strip())
+                        self.log_output("Suggestion inserted into input.\n")
                 elif msg_type == "done":
                     self.is_running = False
                     self.progress.stop()

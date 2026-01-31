@@ -10,6 +10,7 @@ import datetime
 import tarfile
 import zipfile
 import collections
+import subprocess
 from .i18n import _
 
 class CommandRegistry:
@@ -533,6 +534,126 @@ def cmd_uptime(ctx, args):
         
     return str(datetime.timedelta(seconds=uptime_sec))
 
+@CommandRegistry.register("hostname", "help_hostname")
+def cmd_hostname(ctx, args):
+    return platform.node()
+
+@CommandRegistry.register("lscpu", "help_lscpu")
+def cmd_lscpu(ctx, args):
+    info = []
+    info.append(f"Architecture:        {platform.machine()}")
+    info.append(f"CPU op-mode(s):      32-bit, 64-bit")
+    # sys is needed here
+    import sys
+    info.append(f"Byte Order:          {sys.byteorder.title()}Endian")
+    info.append(f"CPU(s):              {os.cpu_count()}")
+    info.append(f"Vendor ID:           {platform.processor()}")
+    
+    # Try to get more detailed info on Windows
+    if platform.system() == "Windows":
+        try:
+            output = subprocess.check_output("wmic cpu get Name,MaxClockSpeed /format:list", shell=True).decode()
+            for line in output.splitlines():
+                if line.strip():
+                    info.append(f"  {line.strip()}")
+        except:
+            pass
+            
+    return "\n".join(info)
+
+@CommandRegistry.register("lspci", "help_lspci")
+def cmd_lspci(ctx, args):
+    if platform.system() == "Windows":
+        try:
+            # Try PowerShell if wmic fails
+            cmd = "powershell -Command \"Get-PnpDevice | Where-Object { $_.InstanceId -like '*PCI*' } | Select-Object -Property FriendlyName, InstanceId | Format-Table -HideTableHeaders\""
+            output = subprocess.check_output(cmd, shell=True).decode(errors='ignore')
+            if not output.strip():
+                 return "No PCI devices found."
+            return output.strip()
+        except Exception as e:
+            return f"lspci: error getting info: {e} (Note: wmic/powershell required)"
+    else:
+        # Linux/Mac fallback - usually lspci is installed, but if we are simulating...
+        # We can try to read /sys/bus/pci/devices if on Linux
+        return "lspci: Not fully implemented for non-Windows (try real 'lspci')"
+
+@CommandRegistry.register("lsusb", "help_lsusb")
+def cmd_lsusb(ctx, args):
+    if platform.system() == "Windows":
+        try:
+            cmd = "powershell -Command \"Get-PnpDevice | Where-Object { $_.InstanceId -like '*USB*' } | Select-Object -Property FriendlyName, InstanceId | Format-Table -HideTableHeaders\""
+            output = subprocess.check_output(cmd, shell=True).decode(errors='ignore')
+            if not output.strip():
+                 return "No USB devices found."
+            return output.strip()
+        except Exception as e:
+            return f"lsusb: error: {e} (Note: wmic/powershell required)"
+    return "lsusb: Not available"
+
+@CommandRegistry.register("free", "help_free")
+def cmd_free(ctx, args):
+    # Try to provide memory info
+    try:
+        import psutil
+        vm = psutil.virtual_memory()
+        swap = psutil.swap_memory()
+        
+        header = f"{'':>10} {'total':>10} {'used':>10} {'free':>10} {'shared':>10} {'buff/cache':>10} {'available':>10}"
+        mem_row = f"{'Mem:':>10} {vm.total//1024:>10} {vm.used//1024:>10} {vm.free//1024:>10} {0:>10} {0:>10} {vm.available//1024:>10}"
+        swap_row = f"{'Swap:':>10} {swap.total//1024:>10} {swap.used//1024:>10} {swap.free//1024:>10}"
+        return f"{header}\n{mem_row}\n{swap_row}"
+    except ImportError:
+        # Fallback without psutil
+        if platform.system() == "Windows":
+             try:
+                 output = subprocess.check_output("wmic OS get FreePhysicalMemory,TotalVisibleMemorySize /Value", shell=True).decode()
+                 info = {}
+                 for line in output.splitlines():
+                     if "=" in line:
+                         k, v = line.split("=", 1)
+                         info[k.strip()] = v.strip()
+                 
+                 total = int(info.get('TotalVisibleMemorySize', 0))
+                 free = int(info.get('FreePhysicalMemory', 0))
+                 used = total - free
+                 
+                 header = f"{'':>10} {'total':>10} {'used':>10} {'free':>10}"
+                 mem_row = f"{'Mem:':>10} {total:>10} {used:>10} {free:>10}"
+                 return f"{header}\n{mem_row}\n(Install 'psutil' for detailed info)"
+             except:
+                 return "free: unavailable (install psutil)"
+        else:
+            return "free: unavailable (install psutil)"
+
+@CommandRegistry.register("df", "help_df")
+def cmd_df(ctx, args):
+    path = "."
+    if args:
+        path = args[0]
+    
+    try:
+        target_path = path if os.path.isabs(path) else os.path.join(ctx.cwd, path)
+        # Check if path exists or use cwd
+        if not os.path.exists(target_path):
+            target_path = ctx.cwd
+            
+        total, used, free = shutil.disk_usage(target_path)
+        
+        header = f"{'Filesystem':<15} {'1K-blocks':>12} {'Used':>12} {'Available':>12} {'Use%':>5} {'Mounted on'}"
+        
+        # 1K blocks
+        total_k = total // 1024
+        used_k = used // 1024
+        free_k = free // 1024
+        percent = int((used / total) * 100) if total > 0 else 0
+        
+        drive = os.path.splitdrive(os.path.abspath(target_path))[0] or "/"
+        
+        return f"{header}\n{drive:<15} {total_k:>12} {used_k:>12} {free_k:>12} {percent:>4}% {target_path}"
+    except Exception as e:
+        return f"df: error: {str(e)}"
+
 # --- New Commands (Archive/File) ---
 
 @CommandRegistry.register("chmod", "help_chmod")
@@ -613,3 +734,66 @@ def cmd_zip(ctx, args):
         return f"Created zip {zip_name}"
     except Exception as e:
         return f"zip: error: {str(e)}"
+
+# --- New Commands (Process) ---
+
+@CommandRegistry.register("ps", "help_ps")
+def cmd_ps(ctx, args):
+    # Try to use psutil if available
+    try:
+        import psutil
+        header = f"{'PID':<8} {'USER':<12} {'STATUS':<10} {'NAME'}"
+        rows = [header]
+        for proc in psutil.process_iter(['pid', 'name', 'username', 'status']):
+            try:
+                info = proc.info
+                rows.append(f"{info['pid']:<8} {str(info['username'])[:12]:<12} {info['status']:<10} {info['name']}")
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                pass
+        return "\n".join(rows)
+    except ImportError:
+        # Fallback to system commands
+        if platform.system() == "Windows":
+             try:
+                 # tasklist is standard on Windows
+                 return subprocess.check_output("tasklist", shell=True).decode()
+             except Exception as e:
+                 return f"ps: tasklist failed: {e}"
+        else:
+             try:
+                 return subprocess.check_output(["ps", "aux"]).decode()
+             except:
+                 return "ps: not available (install psutil)"
+
+@CommandRegistry.register("kill", "help_kill")
+def cmd_kill(ctx, args):
+    if not args:
+        return "kill: missing PID"
+    
+    try:
+        pid = int(args[0])
+        # Try os.kill (works on Unix and Windows for SIGTERM/SIGKILL equivalent)
+        import signal
+        
+        # Windows only supports signal.SIGTERM (15) and signal.CTRL_C_EVENT etc.
+        # But os.kill(pid, signal.SIGTERM) works on Windows to terminate.
+        
+        os.kill(pid, signal.SIGTERM)
+        return f"Sent SIGTERM to process {pid}"
+    except ValueError:
+        return "kill: PID must be an integer"
+    except ProcessLookupError:
+        return f"kill: PID {pid} not found"
+    except PermissionError:
+        return f"kill: Permission denied for PID {pid}"
+    except Exception as e:
+        return f"kill: error: {str(e)}"
+
+@CommandRegistry.register("who", "help_who")
+def cmd_who(ctx, args):
+    # who is similar to whoami but shows login info.
+    # We'll just show current user and time for now as a simple approximation
+    user = getpass.getuser()
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    # In a real shell 'who' shows tty, we don't have that easily without psutil/w
+    return f"{user:<10} tty1         {ts}"
