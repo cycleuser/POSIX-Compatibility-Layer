@@ -67,27 +67,27 @@ python start_gui.py
 
 ### 帮助命令
 列出了目前支持的少量基础命令。
-![Help Command](images/0-help.png)
+![Help Command](https://raw.githubusercontent.com/cycleuser/POSIX-Compatibility-Layer/refs/heads/main/images/0-help.png)
 
 ### 目录列表 (ls)
 尝试模拟了 ls 命令的输出格式。
-![List Directory](images/1-ls.png)
+![List Directory](https://raw.githubusercontent.com/cycleuser/POSIX-Compatibility-Layer/refs/heads/main/images/1-ls.png)
 
 ### 路径显示 (pwd)
 显示当前的工作目录。
-![PWD](images/2-pwd.png)
+![PWD](https://raw.githubusercontent.com/cycleuser/POSIX-Compatibility-Layer/refs/heads/main/images/2-pwd.png)
 
 ### 目录切换 (cd)
 基础的目录跳转功能。
-![Change Directory](images/3-cd.png)
+![Change Directory](https://raw.githubusercontent.com/cycleuser/POSIX-Compatibility-Layer/refs/heads/main/images/3-cd.png)
 
 ### 系统概览 (lscpu)
 获取 CPU 的基本信息。
-![LSCPU](images/4-lscpu.png)
+![LSCPU](https://raw.githubusercontent.com/cycleuser/POSIX-Compatibility-Layer/refs/heads/main/images/4-lscpu.png)
 
 ### 硬件列表 (lspci)
 在 Windows 上尝试通过命令模拟 lspci 的输出。
-![LSPCI](images/5-lspci.png)
+![LSPCI](https://raw.githubusercontent.com/cycleuser/POSIX-Compatibility-Layer/refs/heads/main/images/5-lspci.png)
 
 ## 授权协议
 

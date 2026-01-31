@@ -67,27 +67,27 @@ The following screenshots show the current rudimentary form of the tool, with ba
 
 ### Help Command
 Lists the few basic commands currently supported.
-![Help Command](images/0-help.png)
+![Help Command](https://raw.githubusercontent.com/cycleuser/POSIX-Compatibility-Layer/refs/heads/main/images/0-help.png)
 
 ### Directory List (ls)
 Attempts to simulate the output format of the ls command.
-![List Directory](images/1-ls.png)
+![List Directory](https://raw.githubusercontent.com/cycleuser/POSIX-Compatibility-Layer/refs/heads/main/images/1-ls.png)
 
 ### Path Display (pwd)
 Displays the current working directory.
-![PWD](images/2-pwd.png)
+![PWD](https://raw.githubusercontent.com/cycleuser/POSIX-Compatibility-Layer/refs/heads/main/images/2-pwd.png)
 
 ### Directory Switch (cd)
 Basic directory navigation functionality.
-![Change Directory](images/3-cd.png)
+![Change Directory](https://raw.githubusercontent.com/cycleuser/POSIX-Compatibility-Layer/refs/heads/main/images/3-cd.png)
 
 ### System Overview (lscpu)
 Retrieves basic CPU information.
-![LSCPU](images/4-lscpu.png)
+![LSCPU](https://raw.githubusercontent.com/cycleuser/POSIX-Compatibility-Layer/refs/heads/main/images/4-lscpu.png)
 
 ### Hardware List (lspci)
 Attempts to simulate lspci output via commands on Windows.
-![LSPCI](images/5-lspci.png)
+![LSPCI](https://raw.githubusercontent.com/cycleuser/POSIX-Compatibility-Layer/refs/heads/main/images/5-lspci.png)
 
 ## License
 
