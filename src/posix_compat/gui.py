@@ -1,29 +1,93 @@
 import tkinter as tk
-from tkinter import scrolledtext, font, Menu
+from tkinter import scrolledtext, font, Menu, messagebox
 from tkinter import ttk
 import shlex
 import threading
 import queue
+from typing import Optional, Tuple
 from .core import CompatLayer, CommandRegistry
 from .ollama_client import OllamaClient
+from .intent_parser import IntentParser, IntentType, ParsedCommand
+from .permission_manager import PermissionManager, PermissionScope
 from . import i18n
 from .i18n import _
+from .system_detector import SystemDetector
+
+
+class ConfirmationDialog(tk.Toplevel):
+    def __init__(self, parent, command: str, args: list, risk_level: str, risk_message: str):
+        super().__init__(parent)
+        self.title(_("gui_confirm_title") or "Confirmation Required")
+        self.result: Optional[Tuple[bool, PermissionScope]] = None
+        self.transient(parent)
+        self.grab_set()
+        
+        self._create_widgets(command, args, risk_level, risk_message)
+        self._center_window()
+        
+    def _create_widgets(self, command: str, args: list, risk_level: str, risk_message: str):
+        frame = ttk.Frame(self, padding=20)
+        frame.pack(fill=tk.BOTH, expand=True)
+        
+        title_label = ttk.Label(frame, text=_("gui_confirm_title") or "Confirmation Required", 
+                                font=("", 14, "bold"))
+        title_label.pack(pady=(0, 10))
+        
+        info_frame = ttk.LabelFrame(frame, padding=10)
+        info_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(info_frame, text=f"Command: {command} {' '.join(args)}", 
+                  font=("", 10)).pack(anchor=tk.W)
+        ttk.Label(info_frame, text=f"Risk Level: {risk_level.upper()}", 
+                  font=("", 10, "bold")).pack(anchor=tk.W)
+        if risk_message:
+            ttk.Label(info_frame, text=f"Warning: {risk_message}", 
+                      wraplength=400, font=("", 9)).pack(anchor=tk.W, pady=(5, 0))
+        
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(pady=15)
+        
+        ttk.Button(btn_frame, text=_("gui_btn_once") or "Once", width=12,
+                   command=lambda: self._respond(True, PermissionScope.SESSION)).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text=_("gui_btn_always") or "Always", width=12,
+                   command=lambda: self._respond(True, PermissionScope.ALWAYS)).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text=_("gui_btn_session") or "Session", width=12,
+                   command=lambda: self._respond(True, PermissionScope.SESSION)).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text=_("gui_btn_cancel") or "Cancel", width=12,
+                   command=lambda: self._respond(False, PermissionScope.NEVER)).pack(side=tk.LEFT, padx=5)
+        
+        self.protocol("WM_DELETE_WINDOW", lambda: self._respond(False, PermissionScope.NEVER))
+    
+    def _respond(self, approved: bool, scope: PermissionScope):
+        self.result = (approved, scope)
+        self.destroy()
+    
+    def _center_window(self):
+        self.update_idletasks()
+        width = self.winfo_width()
+        height = self.winfo_height()
+        x = (self.winfo_screenwidth() // 2) - (width // 2)
+        y = (self.winfo_screenheight() // 2) - (height // 2)
+        self.geometry(f"+{x}+{y}")
+
 
 class CompatGUI:
     def __init__(self, root):
         self.root = root
         self.root.title(_("gui_title"))
-        self.root.geometry("900x600")
+        self.root.geometry("1000x700")
         
         self.compat = CompatLayer()
         self.registry = CommandRegistry.get_all_commands()
         self.ollama_client = OllamaClient()
+        self.intent_parser = IntentParser()
+        self.permission_mgr = PermissionManager()
+        self.system_info = SystemDetector.get_info()
         
-        # Thread communication
         self.result_queue = queue.Queue()
         self.is_running = False
+        self._pending_command: Optional[ParsedCommand] = None
         
-        # Configure style
         self.bg_color = "#1e1e1e"
         self.fg_color = "#ffffff"
         self.entry_bg = "#2d2d2d"
@@ -31,56 +95,48 @@ class CompatGUI:
         
         self.root.configure(bg=self.bg_color)
         
-        # Setup Menu
         self.create_menu()
-        
-        # Main Layout
         self.create_widgets()
         
-        # Initial Text Update
         self.update_ui_text()
         self.update_status()
         
-        # Start queue checker
         self.check_queue()
 
     def create_menu(self):
         menubar = Menu(self.root)
         self.root.config(menu=menubar)
         
-        # Language Menu
         self.lang_menu = Menu(menubar, tearoff=0)
         menubar.add_cascade(label=_("menu_lang"), menu=self.lang_menu)
         
-        # Add languages dynamically
         available_langs = i18n.get_available_languages()
         for code, name in available_langs:
             self.lang_menu.add_command(label=name, command=lambda c=code: self.change_language(c))
+        
+        self.settings_menu = Menu(menubar, tearoff=0)
+        menubar.add_cascade(label=_("menu_settings") or "Settings", menu=self.settings_menu)
+        self.settings_menu.add_command(label=_("menu_reset_perms") or "Reset Permissions", 
+                                        command=self._reset_permissions)
 
     def change_language(self, lang_code):
         i18n.set_language(lang_code)
         self.update_ui_text()
         
+    def _reset_permissions(self):
+        self.permission_mgr.reset_all_permissions()
+        messagebox.showinfo("Permissions", _("msg_perms_reset") or "All permissions have been reset.")
+
     def update_ui_text(self):
-        """Update all static text elements based on current language."""
         self.root.title(_("gui_title"))
         
-        # Update Menu Label (Trickier in Tkinter, usually needs recreation or index access)
-        # Simplified: Just update the menu item if possible, or recreate menu.
-        # For this example, we'll recreate the menu bar title if possible, 
-        # but standard Tk menu bar labels are hard to change dynamically without recreation.
-        # Let's try to update the cascade label by index.
         try:
-            # Assuming Language is index 1 (or 0 if it's the first one)
-            # Actually we can't easily get the menu object reference from here to config label.
-            # Recreating menu is safer.
-            self.create_menu() 
+            self.create_menu()
         except:
             pass
 
         self.status_bar.config(text=_("gui_curr_dir", self.compat.get_cwd()))
         
-        # Update AI Panel
         try:
             self.lbl_model.config(text=_("gui_lbl_model"))
             self.btn_refresh.config(text=_("gui_btn_refresh"))
@@ -89,9 +145,6 @@ class CompatGUI:
         except:
             pass
 
-        # Update Buttons
-        # We need references to buttons to update them.
-        # Let's recreate the button bar to be safe and simple.
         for widget in self.btn_container.winfo_children():
             widget.destroy()
             
@@ -116,7 +169,6 @@ class CompatGUI:
             btn.pack(side=tk.LEFT, padx=(0, 5))
 
     def create_widgets(self):
-        # 1. Output Area
         self.output_area = scrolledtext.ScrolledText(
             self.root, 
             wrap=tk.WORD, 
@@ -128,7 +180,6 @@ class CompatGUI:
         )
         self.output_area.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # 2. Input Area
         input_frame = tk.Frame(self.root, bg=self.bg_color)
         input_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
         
@@ -153,18 +204,13 @@ class CompatGUI:
         self.command_entry.bind("<Return>", self.process_command)
         self.command_entry.focus_set()
 
-        # 3. Button Bar Container
         self.btn_container = tk.Frame(self.root, bg=self.bg_color)
         self.btn_container.pack(fill=tk.X, padx=10, pady=(0, 5))
 
-        # 3.5 AI Panel
         self.create_ai_panel()
         
-        # 4. Progress Bar (Indeterminate)
         self.progress = ttk.Progressbar(self.root, mode='indeterminate')
-        # Initially hidden (pack/unpack on demand or just use pack_forget)
         
-        # 5. Status Bar
         self.status_bar = tk.Label(
             self.root, 
             text="Ready", 
@@ -180,31 +226,25 @@ class CompatGUI:
         self.ai_container = tk.Frame(self.root, bg=self.bg_color)
         self.ai_container.pack(fill=tk.X, padx=10, pady=(0, 5))
         
-        # Model Label
         self.lbl_model = tk.Label(self.ai_container, text=_("gui_lbl_model"), bg=self.bg_color, fg=self.fg_color)
         self.lbl_model.pack(side=tk.LEFT, padx=(0, 5))
         
-        # Combobox
         self.model_var = tk.StringVar()
         self.combo_model = ttk.Combobox(self.ai_container, textvariable=self.model_var, state="readonly", width=20)
         self.combo_model.pack(side=tk.LEFT, padx=(0, 5))
         
-        # Refresh Button
         self.btn_refresh = tk.Button(self.ai_container, text=_("gui_btn_refresh"), command=self.refresh_models,
                                      bg=self.button_bg, fg=self.fg_color, relief=tk.FLAT)
         self.btn_refresh.pack(side=tk.LEFT, padx=(0, 10))
         
-        # Ask AI Button
         self.btn_ask = tk.Button(self.ai_container, text=_("gui_btn_ask_ai"), command=self.ask_ai,
                                  bg=self.button_bg, fg=self.fg_color, relief=tk.FLAT)
         self.btn_ask.pack(side=tk.LEFT, padx=(0, 5))
         
-        # Suggest Cmd Button
         self.btn_suggest = tk.Button(self.ai_container, text=_("gui_btn_ai_suggest"), command=self.ai_suggest,
                                      bg=self.button_bg, fg=self.fg_color, relief=tk.FLAT)
         self.btn_suggest.pack(side=tk.LEFT)
 
-        # Initial load
         self.root.after(500, self.refresh_models)
 
     def refresh_models(self):
@@ -266,7 +306,7 @@ class CompatGUI:
 
     def process_command(self, event=None):
         if self.is_running:
-            return # Ignore input while running
+            return
             
         cmd_text = self.command_entry.get()
         if not cmd_text.strip():
@@ -292,23 +332,58 @@ class CompatGUI:
         if cmd_text == "help":
              self.log_output("$ help\n")
              self.log_output("Available commands: " + ", ".join(sorted(self.registry.keys())) + "\n")
+             self.log_output("\nNatural language examples:\n")
+             self.log_output("  'list files' -> ls\n")
+             self.log_output("  'go to home' -> cd ~\n")
              return
 
         self.log_output(f"$ {cmd_text}\n")
         
-        # Parse args
         try:
-            split_args = shlex.split(cmd_text)
-            if not split_args:
+            intent = self.intent_parser.parse(cmd_text, self.ollama_client if self.ollama_client.is_available() else None)
+            
+            if intent.intent_type == IntentType.HELP:
+                self.log_output(intent.response + "\n")
                 return
-            cmd = split_args[0]
-            params = split_args[1:]
+            
+            if intent.needs_clarification:
+                self.log_output(intent.clarification_question + "\n")
+                return
+            
+            if intent.response and not intent.commands:
+                self.log_output(intent.response + "\n")
+                return
+            
+            for parsed_cmd in intent.commands:
+                self._execute_with_confirmation(parsed_cmd)
+                
         except Exception as e:
             self.log_output(f"Error: {str(e)}\n")
-            return
 
-        # Start Async Execution
-        self.start_async_execution(cmd, params)
+    def _execute_with_confirmation(self, parsed_cmd: ParsedCommand):
+        if parsed_cmd.needs_confirmation:
+            dialog = ConfirmationDialog(
+                self.root,
+                parsed_cmd.command,
+                parsed_cmd.args,
+                parsed_cmd.risk_level,
+                parsed_cmd.risk_message or ""
+            )
+            
+            self.root.wait_window(dialog)
+            
+            if dialog.result:
+                approved, scope = dialog.result
+                if not approved:
+                    self.log_output("Command cancelled.\n")
+                    return
+                
+                if scope == PermissionScope.ALWAYS:
+                    self.permission_mgr.grant_permanent_approval(parsed_cmd.command, parsed_cmd.args)
+                elif scope == PermissionScope.SESSION:
+                    self.permission_mgr.grant_session_approval(parsed_cmd.command, parsed_cmd.args)
+        
+        self.start_async_execution(parsed_cmd.command, parsed_cmd.args)
 
     def start_async_execution(self, cmd, params):
         self.is_running = True
